@@ -1,24 +1,31 @@
 import React from 'react';
 import logo from './logo.svg';
 import './App.css';
+import "@aws-amplify/ui-react/styles.css";
+import {
+  withAuthenticator,
+  Button,
+  Heading,
+  Image,
+  View,
+  Card,
+} from "@aws-amplify/ui-react";
 
-function App() {
-  return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <h1>Welcome to the Amplify Framework. Hello from V2</h1>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
-  );
+// Define the props for the App component
+interface AppProps {
+  signOut?: () => void;
+
 }
 
-export default App;
+function App({ signOut }: AppProps) {
+  return (
+    <View className='App'>
+      <Card>
+        <Image src={logo} className="App-logo" alt="logo" />
+        <Heading level={1}>Welcome to Your Amplify App. We now have Auth!</Heading>
+      </Card>
+      <Button onClick={signOut}>Sign Out</Button>
+    </View>
+  )
+}
+export default withAuthenticator(App);
