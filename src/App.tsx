@@ -1,7 +1,8 @@
 import React, { useState, useEffect, FormEvent } from "react";
 import "./App.css";
 import "@aws-amplify/ui-react/styles.css";
-import { Amplify, Storage } from 'aws-amplify'; // Ensure Amplify is imported for configuration
+import { Amplify } from 'aws-amplify';
+import * as Storage from '@aws-amplify/storage'; // Corrected import for all Storage operations
 import {
   Button,
   Flex,
@@ -12,18 +13,17 @@ import {
   View,
   withAuthenticator,
 } from "@aws-amplify/ui-react";
-import { listTodos } from "./graphql/queries"; // Corrected import
-import { createTodo as createNoteMutation } from "./graphql/mutations"; // Corrected import
-import { deleteTodo as deleteNoteMutation } from "./graphql/mutations"; // Corrected import
+import { listTodos } from "./graphql/queries";
+import { createTodo as createNoteMutation, deleteTodo as deleteNoteMutation } from "./graphql/mutations";
 import { generateClient } from 'aws-amplify/api';
 import config from './amplifyconfiguration.json';
 Amplify.configure(config);
 
-interface Todo { // Renamed from Note to Todo to match your GraphQL schema
+interface Todo {
   id?: string;
   name: string;
   description: string;
-  image: string;
+  image?: string;
 }
 
 interface AppProps {
@@ -33,19 +33,20 @@ interface AppProps {
 const client = generateClient();
 
 const App: React.FC<AppProps> = ({ signOut }) => {
-  const [todos, setTodos] = useState<Todo[]>([]); // Renamed from notes to todos
+  const [todos, setTodos] = useState<Todo[]>([]);
 
   useEffect(() => {
-    fetchTodos(); // Renamed from fetchNotes to fetchTodos
+    fetchTodos();
   }, []);
 
-  async function fetchTodos() { // Renamed from fetchNotes to fetchTodos
-    const apiData = await client.graphql({ query: listTodos });
-    const todosFromAPI = (apiData as any).data.listTodos.items as Todo[]; // Cast to Todo[]
+  async function fetchTodos() {
+    const apiData = await client.graphql({ query: listTodos }) as { data: { listTodos: { items: Todo[] } } };
+    const todosFromAPI = apiData.data.listTodos.items;
     await Promise.all(todosFromAPI.map(async todo => {
       if (todo.image) {
-        const url = await Storage.get(todo.name);
-        todo.image = url;
+        const imageKey = todo.image;
+        const urlData = await Storage.getUrl({ key: imageKey });
+        todo.image = urlData as unknown as string; // Adjusting based on your storage configuration
       }
       return todo;
     }));
@@ -54,33 +55,45 @@ const App: React.FC<AppProps> = ({ signOut }) => {
 
   async function createNote(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const formElement = event.currentTarget as HTMLFormElement;
+    const formElement = event.currentTarget;
     const form = new FormData(formElement);
     const image = form.get("image") as File;
     const data = {
       name: form.get("name")?.toString() || '',
       description: form.get("description")?.toString() || '',
-      image: image.name || null,
+      image: image ? image.name : undefined,
     };
-    if (!!data.image) await Storage.put(data.name, image);
+    if (data.image && image) {
+      // Preparing the upload input according to the expected Structure.
+      const uploadInput = {
+        key: data.image,
+        data: image,
+        contentType: image.type,
+      };
+
+      // Used try catch block to ensure data is uploaded to S3 before creating the note.
+      try {
+        await Storage.uploadData(uploadInput);
+      } catch (error) {
+        console.error('Error uploading file: ', error);
+      }
+    }
     await client.graphql({
-      query: createNoteMutation, // Now correctly refers to createTodo
+      query: createNoteMutation,
       variables: { input: data },
     });
-    fetchTodos(); // Renamed from fetchNotes to fetchTodos
-    // //event.currentTarget.reset();
-    formElement.reset(); // Now correctly refers to formElement
+    fetchTodos();
+    formElement.reset();
   }
 
-  async function deleteNote(note: Todo, name?: string) { // Parameter type adjusted to Todo
-    if (!note.id) return; // Ensure we have an id before attempting to delete
-    const newTodos = todos.filter(n => n.id !== note.id);
-    setTodos(newTodos);
-    await Storage.remove(name);
+  async function deleteNote(todo: Todo) {
+    if (!todo.id || !todo.name) return;
+    await Storage.remove({ key: todo.name }); // Adjusted for correct parameter
     await client.graphql({
-      query: deleteNoteMutation, // Now correctly refers to deleteTodo
-      variables: { input: { id: note.id } },
+      query: deleteNoteMutation,
+      variables: { input: { id: todo.id } },
     });
+    setTodos(todos.filter(t => t.id !== todo.id));
   }
 
   return (
@@ -88,60 +101,28 @@ const App: React.FC<AppProps> = ({ signOut }) => {
       <Heading level={1}>My Todo App</Heading>
       <form onSubmit={createNote} style={{ margin: "3rem 0" }}>
         <Flex direction="row" justifyContent="center">
-          <TextField
-            name="name"
-            placeholder="Todo Name"
-            label="Todo Name"
-            labelHidden
-            variation="quiet"
-            required
+          <TextField name="name" placeholder="Todo Name" label="Todo Name" labelHidden variation="quiet" required />
+          <TextField name="description" placeholder="Todo Description" label="Todo Description" labelHidden variation="quiet" required />
+          <View
+            name="image"
+            as="input"
+            type="file"
+            style={{ alignSelf: "end" }}
           />
-          <TextField
-            name="description"
-            placeholder="Todo Description"
-            label="Todo Description"
-            labelHidden
-            variation="quiet"
-            required
-          />
-          <Button type="submit" variation="primary">
-            Create Todo
-          </Button>
+          <Button type="submit" variation="primary">Create Todo</Button>
         </Flex>
       </form>
       <Heading level={2}>Current Todos</Heading>
       <View style={{ margin: "3rem 0" }}>
         {todos.map((todo) => (
-          <Flex
-            key={todo.id || todo.name}
-            direction="row"
-            justifyContent="center"
-            alignItems="center"
-          >
-            <Text as="strong" fontWeight={700}>
-              {todo.name}
-            </Text>
-            <Text as="span" style={{ marginLeft: "1rem", marginRight: "1rem" }}>
-              {todo.description}
-            </Text>
-            {todo.image && (<Image src={todo.image} alt={`visual aid for ${todo.name}`} style={{ width: 400}} />)}
-            <Button variation="link" onClick={() => deleteNote(todo)}>
-              Delete todo
-            </Button>
+          <Flex key={todo.id || todo.name} direction="row" justifyContent="center" alignItems="center">
+            <Text as="strong" fontWeight={700}>{todo.name}</Text>
+            <Text as="span" style={{ marginLeft: "1rem", marginRight: "1rem" }}>{todo.description}</Text>
+            {todo.image && (<Image src={todo.image} alt={`visual aid for ${todo.name}`} style={{ width: '200px' }} />)}
+            <Button variation="link" onClick={() => deleteNote(todo)}>Delete todo</Button>
           </Flex>
         ))}
       </View>
-
-      {/* Add image to the todo block here */}
-      <View 
-        style={{ alignSelf: "end" }}
-        name = "image"
-        as = "input"
-        type="file"
-      >
-      </View>
-
-
       <Button onClick={signOut}>Sign Out</Button>
     </View>
   );
